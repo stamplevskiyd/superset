@@ -233,10 +233,7 @@ def test_get_prequeries(mocker: MockerFixture) -> None:
     """
     Tests for ``get_prequeries``.
     """
-    mocker.patch.object(
-        Database,
-        "get_sqla_engine",
-    )
+    mocker.patch.object(Database, "get_sqla_engine")
     db_engine_spec = mocker.patch.object(Database, "db_engine_spec")
     db_engine_spec.get_prequeries.return_value = ["set a=1", "set b=2"]
 
@@ -397,10 +394,7 @@ def test_get_sqla_engine(mocker: MockerFixture) -> None:
 
     create_engine = mocker.patch("superset.models.core.create_engine")
 
-    database = Database(
-        database_name="my_db",
-        sqlalchemy_uri="trino://",
-    )
+    database = Database(database_name="my_db", sqlalchemy_uri="trino://")
     database._get_sqla_engine(nullpool=False)
 
     create_engine.assert_called_with(
@@ -436,6 +430,31 @@ def test_get_sqla_engine_user_impersonation(mocker: MockerFixture) -> None:
         make_url("trino:///"),
         connect_args={"user": "alice", "source": "Apache Superset"},
     )
+
+
+def test_add_database_to_signature():
+    args = ["param1", "param2"]
+
+    def func_without_db(param1, param2):
+        pass
+
+    def func_with_db_start(database, param1, param2):
+        pass
+
+    def func_with_db_end(param1, param2, database):
+        pass
+
+    database = Database(
+        database_name="my_db",
+        sqlalchemy_uri="trino://",
+        impersonate_user=True,
+    )
+    args1 = database.add_database_to_signature(func_without_db, args.copy())
+    assert args1 == ["param1", "param2"]
+    args2 = database.add_database_to_signature(func_with_db_start, args.copy())
+    assert args2 == [database, "param1", "param2"]
+    args3 = database.add_database_to_signature(func_with_db_end, args.copy())
+    assert args3 == ["param1", "param2", database]
 
 
 @with_feature_flags(IMPERSONATE_WITH_EMAIL_PREFIX=True)
@@ -502,6 +521,7 @@ def test_get_oauth2_config(app_context: None) -> None:
         "token_request_uri": "https://abcd1234.snowflakecomputing.com/oauth/token-request",
         "scope": "refresh_token session:role:USERADMIN",
         "redirect_uri": "http://example.com/api/v1/database/oauth2/",
+        "request_content_type": "json",
     }
 
 
@@ -556,3 +576,30 @@ def test_get_schema_access_for_file_upload() -> None:
     )
 
     assert database.get_schema_access_for_file_upload() == {"public"}
+
+
+def test_engine_context_manager(mocker: MockerFixture) -> None:
+    """
+    Test the engine context manager.
+    """
+    engine_context_manager = mocker.MagicMock()
+    mocker.patch(
+        "superset.models.core.config",
+        new={"ENGINE_CONTEXT_MANAGER": engine_context_manager},
+    )
+    _get_sqla_engine = mocker.patch.object(Database, "_get_sqla_engine")
+
+    database = Database(database_name="my_db", sqlalchemy_uri="trino://")
+    with database.get_sqla_engine("catalog", "schema"):
+        pass
+
+    engine_context_manager.assert_called_once_with(database, "catalog", "schema")
+    engine_context_manager().__enter__.assert_called_once()
+    engine_context_manager().__exit__.assert_called_once_with(None, None, None)
+    _get_sqla_engine.assert_called_once_with(
+        catalog="catalog",
+        schema="schema",
+        nullpool=True,
+        source=None,
+        sqlalchemy_uri="trino://",
+    )
