@@ -20,6 +20,8 @@
 const fs = require('fs');
 const path = require('path');
 const webpack = require('webpack');
+
+const { ModuleFederationPlugin } = webpack.container;
 const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
 const CopyPlugin = require('copy-webpack-plugin');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
@@ -49,10 +51,17 @@ const MINI_CSS_EXTRACT_PUBLICPATH = './';
 
 const {
   mode = 'development',
-  devserverPort = 9000,
+  devserverPort: cliPort,
+  devserverHost: cliHost,
   measure = false,
   nameChunks = false,
 } = parsedArgs;
+
+// Precedence: CLI args > env vars > defaults
+const devserverPort = cliPort || process.env.WEBPACK_DEVSERVER_PORT || 9000;
+const devserverHost =
+  cliHost || process.env.WEBPACK_DEVSERVER_HOST || '127.0.0.1';
+
 const isDevMode = mode !== 'production';
 const isDevServer = process.argv[1].includes('webpack-dev-server');
 
@@ -124,11 +133,7 @@ const plugins = [
   }),
 
   new CopyPlugin({
-    patterns: [
-      'package.json',
-      { from: 'src/assets/images', to: 'images' },
-      { from: 'src/assets/stylesheets', to: 'stylesheets' },
-    ],
+    patterns: ['package.json', { from: 'src/assets/images', to: 'images' }],
   }),
 
   // static pages
@@ -143,6 +148,27 @@ const plugins = [
     inject: true,
     chunks: [],
     filename: '500.html',
+  }),
+  new ModuleFederationPlugin({
+    name: 'superset',
+    filename: 'remoteEntry.js',
+    shared: {
+      react: {
+        singleton: true,
+        eager: true,
+        requiredVersion: packageConfig.dependencies.react,
+      },
+      'react-dom': {
+        singleton: true,
+        eager: true,
+        requiredVersion: packageConfig.dependencies['react-dom'],
+      },
+      antd: {
+        singleton: true,
+        requiredVersion: packageConfig.dependencies.antd,
+        eager: true,
+      },
+    },
   }),
 ];
 
@@ -160,7 +186,22 @@ if (!isDevMode) {
   );
 
   // Runs type checking on a separate process to speed up the build
-  plugins.push(new ForkTsCheckerWebpackPlugin());
+  plugins.push(
+    new ForkTsCheckerWebpackPlugin({
+      typescript: {
+        memoryLimit: 4096,
+        build: true,
+        exclude: [
+          '**/node_modules/**',
+          '**/dist/**',
+          '**/coverage/**',
+          '**/storybook/**',
+          '**/*.stories.{ts,tsx,js,jsx}',
+          '**/*.{test,spec}.{ts,tsx,js,jsx}',
+        ],
+      },
+    }),
+  );
 }
 
 const PREAMBLE = [path.join(APP_DIR, '/src/preamble.ts')];
@@ -262,7 +303,6 @@ const config = {
           name: 'vendors',
           test: new RegExp(
             `/node_modules/(${[
-              'abortcontroller-polyfill',
               'react',
               'react-dom',
               'prop-types',
@@ -306,9 +346,6 @@ const config = {
     // resolve modules from `/superset_frontend/node_modules` and `/superset_frontend`
     modules: ['node_modules', APP_DIR],
     alias: {
-      // TODO: remove aliases once React has been upgraded to v17 and
-      //  AntD version conflict has been resolved
-      antd: path.resolve(path.join(APP_DIR, './node_modules/antd')),
       react: path.resolve(path.join(APP_DIR, './node_modules/react')),
       // TODO: remove Handlebars alias once Handlebars NPM package has been updated to
       // correctly support webpack import (https://github.com/handlebars-lang/handlebars.js/issues/953)
@@ -333,6 +370,7 @@ const config = {
       fs: false,
       vm: require.resolve('vm-browserify'),
       path: false,
+      stream: require.resolve('stream-browserify'),
       ...(isDevMode ? { buffer: require.resolve('buffer/') } : {}), // Fix legacy-plugin-chart-paired-t-test broken Story
     },
   },
@@ -344,6 +382,13 @@ const config = {
         loader: 'imports-loader',
         options: {
           additionalCode: 'var define = false;',
+        },
+      },
+      {
+        test: /node_modules\/(@deck\.gl|@luma\.gl).*\.js$/,
+        loader: 'imports-loader',
+        options: {
+          additionalCode: 'var module = module || {exports: {}};',
         },
       },
       {
@@ -413,38 +458,6 @@ const config = {
             loader: 'css-loader',
             options: {
               sourceMap: true,
-            },
-          },
-        ],
-      },
-      {
-        test: /\.less$/,
-        include: APP_DIR,
-        use: [
-          isDevMode
-            ? 'style-loader'
-            : {
-                loader: MiniCssExtractPlugin.loader,
-                options: {
-                  publicPath: MINI_CSS_EXTRACT_PUBLICPATH,
-                },
-              },
-          {
-            loader: 'css-loader',
-            options: {
-              sourceMap: true,
-            },
-          },
-          {
-            loader: 'less-loader',
-            options: {
-              sourceMap: true,
-              lessOptions: {
-                javascriptEnabled: true,
-                modifyVars: {
-                  'root-entry-name': 'default',
-                },
-              },
             },
           },
         ],
@@ -532,7 +545,10 @@ Object.entries(packageConfig.dependencies).forEach(([pkg, relativeDir]) => {
   const srcPath = path.join(APP_DIR, `./node_modules/${pkg}/src`);
   const dir = relativeDir.replace('file:', '');
 
-  if (/^@superset-ui/.test(pkg) && fs.existsSync(srcPath)) {
+  if (
+    (/^@superset-ui/.test(pkg) || /^@apache-superset/.test(pkg)) &&
+    fs.existsSync(srcPath)
+  ) {
     console.log(`[Superset Plugin] Use symlink source for ${pkg} @ ${dir}`);
     config.resolve.alias[pkg] = path.resolve(APP_DIR, `${dir}/src`);
   }
@@ -558,7 +574,9 @@ if (isDevMode) {
     },
     historyApiFallback: true,
     hot: true,
+    host: devserverHost,
     port: devserverPort,
+    allowedHosts: ['localhost', '.localhost', '127.0.0.1', '::1', '.local'],
     proxy: [() => proxyConfig],
     client: {
       overlay: {
@@ -567,6 +585,11 @@ if (isDevMode) {
         runtimeErrors: error => !/ResizeObserver/.test(error.message),
       },
       logging: 'error',
+      webSocketURL: {
+        hostname: '0.0.0.0',
+        pathname: '/ws',
+        port: 0,
+      },
     },
     static: {
       directory: path.join(process.cwd(), '../static/assets'),

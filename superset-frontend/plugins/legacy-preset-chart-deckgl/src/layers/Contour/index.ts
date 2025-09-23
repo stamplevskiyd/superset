@@ -16,11 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t, ChartMetadata, ChartPlugin } from '@superset-ui/core';
+import { t, ChartMetadata, ChartPlugin, Behavior } from '@superset-ui/core';
 import transformProps from '../../transformProps';
 import controlPanel from './controlPanel';
 import thumbnail from './images/thumbnail.png';
+import thumbnailDark from './images/thumbnail-dark.png';
 import example from './images/example.png';
+import exampleDark from './images/example-dark.png';
 
 const metadata = new ChartMetadata({
   category: t('Map'),
@@ -28,11 +30,13 @@ const metadata = new ChartMetadata({
   description: t(
     'Uses Gaussian Kernel Density Estimation to visualize spatial distribution of data',
   ),
-  exampleGallery: [{ url: example }],
+  exampleGallery: [{ url: example, urlDark: exampleDark }],
   name: t('deck.gl Contour'),
   thumbnail,
+  thumbnailDark,
   useLegacyApi: true,
   tags: [t('deckGL'), t('Spatial'), t('Comparison')],
+  behaviors: [Behavior.InteractiveChart],
 });
 
 export default class ContourChartPlugin extends ChartPlugin {
