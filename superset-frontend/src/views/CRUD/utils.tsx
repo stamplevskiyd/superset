@@ -19,13 +19,13 @@
 
 import {
   logging,
-  styled,
   SupersetClient,
   SupersetClientResponse,
   getClientErrorObject,
   t,
   lruCache,
 } from '@superset-ui/core';
+import { styled } from '@apache-superset/core/ui';
 import Chart from 'src/types/Chart';
 import { intersection } from 'lodash';
 import rison from 'rison';
@@ -310,6 +310,7 @@ export function handleDashboardDelete(
   addDangerToast: (arg0: string) => void,
   dashboardFilter?: string,
   userId?: string | number,
+  getData?: (tab: TableTab) => void,
 ) {
   return SupersetClient.delete({
     endpoint: `/api/v1/dashboard/${id}`,
@@ -333,6 +334,8 @@ export function handleDashboardDelete(
         ],
       };
       if (dashboardFilter === 'Mine') refreshData(filters);
+      else if (dashboardFilter === 'Other' && getData)
+        getData(dashboardFilter as TableTab);
       else refreshData();
       addSuccessToast(t('Deleted: %s', dashboardTitle));
     },

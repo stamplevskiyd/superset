@@ -20,7 +20,8 @@ import { createRef, useCallback, useMemo } from 'react';
 import { shallowEqual, useDispatch, useSelector } from 'react-redux';
 import { nanoid } from 'nanoid';
 import Tabs from '@superset-ui/core/components/Tabs';
-import { css, styled, t, useTheme } from '@superset-ui/core';
+import { t } from '@superset-ui/core';
+import { css, styled, useTheme } from '@apache-superset/core/ui';
 
 import { removeTables, setActiveSouthPaneTab } from 'src/SqlLab/actions/sqlLab';
 
@@ -30,6 +31,8 @@ import { SqlLabRootState } from 'src/SqlLab/types';
 import { useExtensionsContext } from 'src/extensions/ExtensionsContext';
 import ExtensionsManager from 'src/extensions/ExtensionsManager';
 import useQueryEditor from 'src/SqlLab/hooks/useQueryEditor';
+import useLogAction from 'src/logger/useLogAction';
+import { LOG_ACTIONS_SQLLAB_SWITCH_SOUTH_PANE_TAB } from 'src/logger/LogUtils';
 import QueryHistory from '../QueryHistory';
 import {
   STATUS_OPTIONS,
@@ -38,6 +41,7 @@ import {
 } from '../../constants';
 import Results from './Results';
 import TablePreview from '../TablePreview';
+import { ViewContribution } from 'src/SqlLab/contributions';
 
 /*
     editorQueries are queries executed by users passed from SqlEditor component
@@ -96,7 +100,9 @@ const SouthPane = ({
   const theme = useTheme();
   const dispatch = useDispatch();
   const contributions =
-    ExtensionsManager.getInstance().getViewContributions('sqllab.panels') || [];
+    ExtensionsManager.getInstance().getViewContributions(
+      ViewContribution.SouthPanels,
+    ) || [];
   const { getView } = useExtensionsContext();
   const { offline, tables } = useSelector(
     ({ sqlLab: { offline, tables } }: SqlLabRootState) => ({
@@ -125,8 +131,10 @@ const SouthPane = ({
     [pinnedTables],
   );
   const southPaneRef = createRef<HTMLDivElement>();
+  const logAction = useLogAction({ sqlEditorId: queryEditorId });
   const switchTab = (id: string) => {
     dispatch(setActiveSouthPaneTab(id));
+    logAction(LOG_ACTIONS_SQLLAB_SWITCH_SOUTH_PANE_TAB, { tab: id });
   };
   const removeTable = useCallback(
     (key, action) => {

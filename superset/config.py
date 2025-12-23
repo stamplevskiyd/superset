@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from email.mime.multipart import MIMEMultipart
 from importlib.resources import files
-from typing import Any, Callable, Iterator, Literal, TYPE_CHECKING, TypedDict
+from typing import Any, Callable, Iterator, Literal, Optional, TYPE_CHECKING, TypedDict
 
 import click
 from celery.schedules import crontab
@@ -115,6 +115,7 @@ PACKAGE_JSON_FILE = str(files("superset") / "static/assets/package.json")
 #     "rel": "icon"
 # },
 FAVICONS = [{"href": "/static/assets/images/favicon.png"}]
+PDF_COMPRESSION_LEVEL: Literal["NONE", "FAST", "MEDIUM", "SLOW"] = "MEDIUM"
 
 
 def _try_json_readversion(filepath: str) -> str | None:
@@ -198,6 +199,32 @@ SUPERSET_DASHBOARD_PERIODICAL_REFRESH_WARNING_MESSAGE = None
 SUPERSET_DASHBOARD_POSITION_DATA_LIMIT = 65535
 CUSTOM_SECURITY_MANAGER = None
 SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+# ---------------------------------------------------------
+# FedRAMP Cryptographic Compliance
+# ---------------------------------------------------------
+
+# Hash algorithm used for non-cryptographic purposes (cache keys, thumbnails, etc.)
+# Options: 'md5' (legacy), 'sha256'
+#
+# IMPORTANT: Changing this value will invalidate all existing cached content.
+# Cache will re-warm naturally within 24-48 hours.
+#
+# For FedRAMP compliance, set to 'sha256'
+# For backward compatibility with existing deployments, keep as 'md5'
+HASH_ALGORITHM: Literal["md5", "sha256"] = "sha256"
+
+# Fallback hash algorithms for UUID lookup (backward compatibility)
+# When looking up entries by UUID, try these algorithms after the primary one fails.
+# This enables gradual migration from MD5 to SHA-256 without breaking existing entries.
+#
+# Example: When HASH_ALGORITHM='sha256', lookups will try:
+#   1. SHA-256 UUID (primary)
+#   2. MD5 UUID (fallback for legacy entries)
+#
+# Set to empty list to disable fallback (strict mode - only use HASH_ALGORITHM)
+HASH_ALGORITHM_FALLBACKS: list[Literal["md5", "sha256"]] = ["md5"]
+
 # ---------------------------------------------------------
 
 # Your App secret key. Make sure you override it on superset_config.py
@@ -723,46 +750,70 @@ COMMON_BOOTSTRAP_OVERRIDES_FUNC: Callable[  # noqa: E731
 # This is merely a default
 EXTRA_CATEGORICAL_COLOR_SCHEMES: list[dict[str, Any]] = []
 
-# ---------------------------------------------------
-# Theme Configuration for Superset
-# ---------------------------------------------------
+# -----------------------------------------------------------------------------
+# Theme System Configuration
+# -----------------------------------------------------------------------------
 # Superset supports custom theming through Ant Design's theme structure.
-# This allows users to customize colors, fonts, and other UI elements.
 #
-# Theme Generation:
+# Theme Hierarchy:
+# 1. THEME_DEFAULT/THEME_DARK - Base themes defined in config (foundation)
+# 2. System themes - Set by admins via UI (when ENABLE_UI_THEME_ADMINISTRATION=True)
+# 3. Dashboard themes - Applied per dashboard using the theme bolt button
+#
+# How it works:
+# - Custom themes override base themes for any properties they define
+# - Properties not defined in custom themes use the base theme values
+# - Admins can set system-wide themes that apply to all users
+# - Users can apply specific themes to individual dashboards
+#
+# Theme Creation:
 # - Use the Ant Design theme editor: https://ant.design/theme-editor
-# - Export or copy the generated theme JSON and assign to the variables below
-# - For detailed instructions: https://superset.apache.org/docs/configuration/theming/
-#
-# To expose a JSON theme editor modal that can be triggered from the navbar
-# set the `ENABLE_THEME_EDITOR` feature flag to True.
-#
-# Theme Structure:
-# Each theme should follow Ant Design's theme format.
-# To create custom themes, use the Ant Design Theme Editor at https://ant.design/theme-editor
-# and copy the generated JSON configuration.
-#
-# Example theme definition:
-# THEME_DEFAULT = {
-#       "token": {
-#            "colorPrimary": "#2893B3",
-#            "colorSuccess": "#5ac189",
-#            "colorWarning": "#fcc700",
-#            "colorError": "#e04355",
-#            "fontFamily": "'Inter', Helvetica, Arial",
-#            ... # other tokens
-#       },
-#       ... # other theme properties
-# }
+# - Export the generated JSON and use it in your theme configuration
+# -----------------------------------------------------------------------------
 
+# Default theme configuration - foundation for all themes
+# This acts as the base theme for all users
+THEME_DEFAULT: Theme = {
+    "token": {
+        # Brand
+        "brandLogoAlt": "Apache Superset",
+        "brandLogoUrl": APP_ICON,
+        "brandLogoMargin": "18px 0",
+        "brandLogoHref": "/",
+        "brandLogoHeight": "24px",
+        # Spinner
+        "brandSpinnerUrl": None,
+        "brandSpinnerSvg": None,
+        # Default colors
+        "colorPrimary": "#2893B3",  # NOTE: previous lighter primary color was #20a7c9 # noqa: E501
+        "colorLink": "#2893B3",
+        "colorError": "#e04355",
+        "colorWarning": "#fcc700",
+        "colorSuccess": "#5ac189",
+        "colorInfo": "#66bcfe",
+        # Fonts
+        "fontUrls": [],
+        "fontFamily": "Inter, Helvetica, Arial",
+        "fontFamilyCode": "'Fira Code', 'Courier New', monospace",
+        # Extra tokens
+        "transitionTiming": 0.3,
+        "brandIconMaxWidth": 37,
+        "fontSizeXS": "8",
+        "fontSizeXXL": "28",
+        "fontWeightNormal": "400",
+        "fontWeightLight": "300",
+        "fontWeightStrong": "500",
+    },
+    "algorithm": "default",
+}
 
-# Default theme configuration
-# Leave empty to use Superset's default theme
-THEME_DEFAULT: Theme = {"algorithm": "default"}
-
-# Dark theme configuration
-# Applied when user selects dark mode
-THEME_DARK: Theme = {"algorithm": "dark"}
+# Dark theme configuration - foundation for dark mode
+# Inherits all tokens from THEME_DEFAULT and adds dark algorithm
+# Set to None to disable dark mode
+THEME_DARK: Optional[Theme] = {
+    **THEME_DEFAULT,
+    "algorithm": "dark",
+}
 
 # Theme behavior and user preference settings
 # To force a single theme on all users, set THEME_DARK = None
@@ -773,14 +824,17 @@ THEME_DARK: Theme = {"algorithm": "dark"}
 # Enable UI-based theme administration for admins
 ENABLE_UI_THEME_ADMINISTRATION = True  # Allows admins to set system themes via UI
 
-# Custom font configuration
-# Load external fonts at runtime without rebuilding the application
-# Example:
-# CUSTOM_FONT_URLS = [
-#     "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
-#     "https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap",
-# ]
-CUSTOM_FONT_URLS: list[str] = []
+# Maximum number of font URLs allowed per theme.
+THEME_FONTS_MAX_URLS: int = 15
+
+# Domains allowed for loading fonts via theme fontUrls token.
+# Only HTTPS URLs from these domains will be accepted.
+THEME_FONT_URL_ALLOWED_DOMAINS: list[str] = [
+    "fonts.googleapis.com",  # Google Fonts API (serves CSS)
+    "fonts.gstatic.com",  # Google Fonts CDN (serves font files)
+    "use.typekit.net",  # Adobe Fonts (serves both CSS and fonts)
+    "use.typekit.com",  # Adobe Fonts alternate (serves both CSS and fonts)
+]
 
 # ---------------------------------------------------
 # EXTRA_SEQUENTIAL_COLOR_SCHEMES is used for adding custom sequential color schemes
@@ -948,7 +1002,7 @@ CORS_OPTIONS: dict[Any, Any] = {
 # Disabling this option is not recommended for security reasons. If you wish to allow
 # valid safe elements that are not included in the default sanitization schema, use the
 # HTML_SANITIZATION_SCHEMA_EXTENSIONS configuration.
-HTML_SANITIZATION = False
+HTML_SANITIZATION = True
 
 # Use this configuration to extend the HTML sanitization schema.
 # By default we use the GitHub schema defined in
@@ -984,6 +1038,12 @@ ALLOWED_EXTENSIONS = {*EXCEL_EXTENSIONS, *CSV_EXTENSIONS, *COLUMNAR_EXTENSIONS}
 # method.
 # note: index option should not be overridden
 CSV_EXPORT = {"encoding": "utf-8-sig"}
+
+# CSV Streaming: row threshold for using streaming CSV exports
+# When row count >= this threshold, use streaming response instead of loading
+# all data into memory. Streaming provides real-time progress and handles
+# large datasets efficiently.
+CSV_STREAMING_ROW_THRESHOLD = 100000
 
 # Excel Options: key/value pairs that will be passed as argument to DataFrame.to_excel
 # method.
@@ -1101,6 +1161,13 @@ DISPLAY_MAX_ROW = 10000
 # the SQL Lab UI
 DEFAULT_SQLLAB_LIMIT = 1000
 
+# Dataset datetime format detection settings
+# Auto-detect datetime formats on dataset creation/refresh
+DATASET_AUTO_DETECT_DATETIME_FORMATS = True
+
+# Sample size for datetime format detection
+DATETIME_FORMAT_DETECTION_SAMPLE_SIZE = 1000
+
 # The limit for the Superset Meta DB when the feature flag ENABLE_SUPERSET_META_DB is on
 SUPERSET_META_DB_LIMIT: int | None = 1000
 
@@ -1126,6 +1193,11 @@ DASHBOARD_AUTO_REFRESH_INTERVALS = [
     [43200, "12 hours"],
     [86400, "24 hours"],
 ]
+
+# Performance optimization: Return only custom tags in dashboard list API
+# When enabled, filters out implicit tags (owner, type, favorited_by) at SQL JOIN level
+# Reduces response payload and query time for dashboards with many owners
+DASHBOARD_LIST_CUSTOM_TAGS_ONLY: bool = False
 
 # This is used as a workaround for the alerts & reports scheduler task to get the time
 # celery beat triggered it, see https://github.com/celery/celery/issues/6974 for details
@@ -1173,7 +1245,7 @@ class CeleryConfig:  # pylint: disable=too-few-public-methods
         # "prune_logs": {
         #     "task": "prune_logs",
         #     "schedule": crontab(minute="*", hour="*"),
-        #     "kwargs": {"retention_period_days": 180},
+        #     "kwargs": {"retention_period_days": 180, "max_rows_per_run": 10000},
         # },
         # Uncomment to enable Slack channel cache warm-up
         # "slack.cache_channels": {
@@ -1329,6 +1401,15 @@ ALLOWED_USER_CSV_SCHEMA_FUNC = allowed_schemas_for_csv_upload
 
 # Values that should be treated as nulls for the csv uploads.
 CSV_DEFAULT_NA_NAMES = list(STR_NA_VALUES)
+
+# Values that should be treated as nulls for scheduled reports CSV processing.
+# If not set or None, defaults to standard pandas NA handling behavior.
+# Set to a custom list to control which values should be treated as null.
+# Examples:
+# REPORTS_CSV_NA_NAMES = None  # Use default pandas NA handling (backwards compatible)
+# REPORTS_CSV_NA_NAMES = []    # Disable all automatic NA conversion
+# REPORTS_CSV_NA_NAMES = ["", "NULL", "null"]  # Only treat these specific values as NA
+REPORTS_CSV_NA_NAMES: list[str] | None = None
 
 # Chunk size for reading CSV files during uploads
 # Smaller values use less memory but may be slower for large files
@@ -1711,6 +1792,11 @@ SLACK_API_TOKEN: Callable[[], str] | str | None = None
 SLACK_PROXY = None
 SLACK_CACHE_TIMEOUT = int(timedelta(days=1).total_seconds())
 
+# Maximum number of retries when Slack API returns rate limit errors
+# Default: 2
+# For workspaces with 10k+ channels, consider increasing to 10
+SLACK_API_RATE_LIMIT_RETRY_COUNT = 2
+
 # The webdriver to use for generating reports. Use one of the following
 # firefox
 #   Requires: geckodriver and firefox installations
@@ -1864,6 +1950,11 @@ TALISMAN_CONFIG = {
         "style-src": [
             "'self'",
             "'unsafe-inline'",
+            *[f"https://{d}" for d in THEME_FONT_URL_ALLOWED_DOMAINS],
+        ],
+        "font-src": [
+            "'self'",
+            *[f"https://{d}" for d in THEME_FONT_URL_ALLOWED_DOMAINS],
         ],
         "script-src": ["'self'", "'strict-dynamic'"],
     },
@@ -1899,6 +1990,11 @@ TALISMAN_DEV_CONFIG = {
         "style-src": [
             "'self'",
             "'unsafe-inline'",
+            *[f"https://{d}" for d in THEME_FONT_URL_ALLOWED_DOMAINS],
+        ],
+        "font-src": [
+            "'self'",
+            *[f"https://{d}" for d in THEME_FONT_URL_ALLOWED_DOMAINS],
         ],
         "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
     },
@@ -2171,6 +2267,14 @@ CATALOGS_SIMPLIFIED_MIGRATION: bool = False
 # considerably increases the time to process it. Running it in async mode prevents
 # keeping a web API call open for this long.
 SYNC_DB_PERMISSIONS_IN_ASYNC_MODE: bool = False
+
+# CUSTOM_DATABASE_ERRORS: Configure custom error messages for database exceptions
+# in superset/custom_database_errors.py.
+# Transform raw database errors into user-friendly messages with optional documentation
+try:
+    from superset.custom_database_errors import CUSTOM_DATABASE_ERRORS
+except ImportError:
+    CUSTOM_DATABASE_ERRORS = {}
 
 
 LOCAL_EXTENSIONS: list[str] = []

@@ -338,7 +338,6 @@ export function runQuery(query, runPreviewOnly) {
     const postPayload = {
       client_id: query.id,
       database_id: query.dbId,
-      json: true,
       runAsync: query.runAsync,
       catalog: query.catalog,
       schema: query.schema,
@@ -395,7 +394,7 @@ export function runQueryFromSqlEditor(
       dbId: qe.dbId,
       sql: qe.selectedText || qe.sql,
       sqlEditorId: qe.tabViewId ?? qe.id,
-      immutableId: qe.immutableId,
+      sqlEditorImmutableId: qe.immutableId,
       tab: qe.name,
       catalog: qe.catalog,
       schema: qe.schema,
@@ -915,11 +914,27 @@ export function queryEditorSetAndSaveSql(targetQueryEditor, sql, queryId) {
 
 export function formatQuery(queryEditor) {
   return function (dispatch, getState) {
-    const { sql } = getUpToDateQuery(getState(), queryEditor);
+    const { sql, dbId, templateParams } = getUpToDateQuery(
+      getState(),
+      queryEditor,
+    );
+    const body = { sql };
+
+    // Include database_id and template_params if available for Jinja processing
+    if (dbId) {
+      body.database_id = dbId;
+    }
+    if (templateParams) {
+      // Send templateParams as a JSON string to match the backend schema
+      body.template_params =
+        typeof templateParams === 'string'
+          ? templateParams
+          : JSON.stringify(templateParams);
+    }
+
     return SupersetClient.post({
       endpoint: `/api/v1/sqllab/format_sql/`,
-      // TODO (betodealmeida): pass engine as a parameter for better formatting
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     }).then(({ json }) => {
       dispatch(queryEditorSetSql(queryEditor, json.result));
@@ -951,12 +966,18 @@ export function mergeTable(table, query, prepend) {
   return { type: MERGE_TABLE, table, query, prepend };
 }
 
-export function addTable(queryEditor, tableName, catalogName, schemaName) {
+export function addTable(
+  queryEditor,
+  tableName,
+  catalogName,
+  schemaName,
+  expanded = true,
+) {
   return function (dispatch, getState) {
     const { dbId } = getUpToDateQuery(getState(), queryEditor, queryEditor.id);
     const table = {
       dbId,
-      queryEditorId: queryEditor.id,
+      queryEditorId: queryEditor.tabViewId ?? queryEditor.id,
       catalog: catalogName,
       schema: schemaName,
       name: tableName,
@@ -965,7 +986,7 @@ export function addTable(queryEditor, tableName, catalogName, schemaName) {
       mergeTable({
         ...table,
         id: nanoid(11),
-        expanded: true,
+        expanded,
       }),
     );
   };
@@ -1018,12 +1039,13 @@ export function runTablePreviewQuery(newTable, runPreviewOnly) {
   };
 }
 
-export function syncTable(table, tableMetadata) {
+export function syncTable(table, tableMetadata, finalQueryEditorId) {
   return function (dispatch) {
+    const finalTable = { ...table, queryEditorId: finalQueryEditorId };
     const sync = isFeatureEnabled(FeatureFlag.SqllabBackendPersistence)
       ? SupersetClient.post({
           endpoint: encodeURI('/tableschemaview/'),
-          postPayload: { table: { ...tableMetadata, ...table } },
+          postPayload: { table: { ...tableMetadata, ...finalTable } },
         })
       : Promise.resolve({ json: { id: table.id } });
 
